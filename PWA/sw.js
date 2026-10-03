@@ -1,6 +1,6 @@
 const BASE=new URL('./',self.location.href);
 const PREFIX='cfw-pwa-'+encodeURIComponent(BASE.pathname)+'-';
-const CACHE=PREFIX+'bdb69205b0d4cfe3';
+const CACHE=PREFIX+'d630993cb0483808';
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const response=await fetch(new URL('precache.json',BASE),{cache:'no-store'});if(!response.ok)throw Error('Precache manifest unavailable');
  const paths=await response.json(),cache=await caches.open(CACHE);
