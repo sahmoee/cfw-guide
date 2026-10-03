@@ -1,0 +1,15 @@
+AGENTS.md
+README_FIRST.md
+.DS_Store
+*.xcuserstate
+xcuserdata/
+DerivedData/
+build/
+.env
+.env.*
+*.p8
+*.pem
+Secrets.xcconfig
+.wrangler/
+CFW Guide.xcodeproj/
+Config/
