@@ -1,54 +1,324 @@
-import {normalize,recommendation,validateSnapshot} from './core.mjs';
-const app=document.querySelector('#app'), status=document.querySelector('#status');
-let guide,data,installPrompt,offlineReady=false;
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const route=p=>'#page='+encodeURIComponent(p);
-let saved;try{saved=JSON.parse(localStorage.getItem('cfw.saved')||'[]');if(!Array.isArray(saved))saved=[];}catch{saved=[];}
-const safeLink=href=>String(href).startsWith('#')?href:(/^https?:\/\//i.test(href)?href:'#devices');
-const card=(title,detail,href)=>`<a class="card" href="${esc(safeLink(href))}"><h3>${esc(title)}</h3><span class="muted">${esc(detail)}</span></a>`;
-function state(){status.textContent=offlineReady?(navigator.onLine?'Online · offline library ready':'Offline · saved library'):(navigator.onLine?'Online · preparing offline copy':'Offline copy not ready');}
-function safeHTML(raw,path){
- const doc=new DOMParser().parseFromString(raw,'text/html');
- doc.querySelectorAll('script,iframe,object,embed,style,link,meta,form,svg,math,base').forEach(e=>e.remove());
- for(const el of doc.querySelectorAll('*'))for(const attr of [...el.attributes])if(attr.name.startsWith('on')||['srcdoc','style','srcset','formaction','action','ping','background','xlink:href'].includes(attr.name))el.removeAttribute(attr.name);
- doc.querySelectorAll('[src]').forEach(el=>{let src=el.getAttribute('src');if(src.startsWith('cfwasset:///assets/')){src=src.replace('cfwasset:///','./');}try{const u=new URL(src,new URL('./',location.href));if(u.origin!==location.origin||!['http:','https:'].includes(u.protocol))el.removeAttribute('src');else el.setAttribute('src',u.href);}catch{el.removeAttribute('src');}});
- doc.querySelectorAll('a').forEach(a=>{try{const u=new URL(a.getAttribute('href'),`https://ios.cfw.guide${path}`);if(u.host==='ios.cfw.guide'){a.href=u.pathname.startsWith('/get-started')?'#devices':route(u.pathname+u.hash);}else if(['https:','http:'].includes(u.protocol)){a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';}else a.removeAttribute('href');}catch{a.removeAttribute('href');}});
- return doc.body.innerHTML;
+import { normalize, recommendation, validateSnapshot } from "./core.mjs";
+const app = document.querySelector("#app"),
+  status = document.querySelector("#status");
+let guide,
+  data,
+  installPrompt,
+  offlineReady = false;
+const esc = (s) =>
+  String(s ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+const route = (p) => "#page=" + encodeURIComponent(p);
+let saved;
+try {
+  saved = JSON.parse(localStorage.getItem("cfw.saved") || "[]");
+  if (!Array.isArray(saved)) saved = [];
+  else saved = saved.filter((p) => typeof p === "string");
+} catch {
+  saved = [];
 }
-function render(){
- if(!guide)return;const hash=location.hash.slice(1)||'home';
- document.querySelectorAll('nav a').forEach(a=>{a.removeAttribute('aria-current');if(a.hash==='#'+hash)a.setAttribute('aria-current','page');});
- if(hash.startsWith('page=')){
- const path=decodeURIComponent(hash.slice(5)),page=guide.pages.find(p=>normalize(p.path)===normalize(path));
- if(!page){app.innerHTML='<h1>Page unavailable</h1><p>This link is not in the bundled library. It may have been removed upstream.</p>';return;}
- app.innerHTML=`<a href="#guides">← Guides</a><h1>${esc(page.title)}</h1><div class="row"><button id="bookmark">${saved.includes(page.path)?'Remove bookmark':'Save guide'}</button><a href="https://ios.cfw.guide${esc(page.path)}" target="_blank" rel="noopener">Original page ↗</a></div><article class="reader">${safeHTML(page.html,page.path)}</article><div class="row">${page.prev?card('Previous',page.prev.title,route(page.prev.path)):''}${page.next?card('Next',page.next.title,route(page.next.path)):''}</div>`;
- document.querySelector('#bookmark').onclick=()=>{const next=saved.includes(page.path)?saved.filter(p=>p!==page.path):[...saved,page.path];try{localStorage.setItem('cfw.saved',JSON.stringify(next));saved=next;render();}catch{alert('Browser storage is unavailable. Bookmark was not saved.');}};
- const fragment=path.split('#')[1];if(fragment)document.getElementById(decodeURIComponent(fragment))?.scrollIntoView();
- }else if(hash==='devices'){
- app.innerHTML='<h1>Find your guide</h1><p>Choose your exact model and software version. The browser cannot reliably detect your device model.</p><label for="device">Device</label><select id="device"><option value="">Choose model…</option></select><label for="firmware">Software version / build</label><select id="firmware" disabled><option>Select a device first</option></select><div id="match" aria-live="polite"></div>';
- const select=document.querySelector('#device'),fw=document.querySelector('#firmware');
- for(const [id,d] of Object.entries(data.devices).sort((a,b)=>a[1].name.localeCompare(b[1].name)))select.add(new Option(`${d.name} · ${id}`,id));
- select.onchange=()=>{fw.replaceChildren(new Option('Choose version…',''));fw.disabled=!select.value;for(const f of data.firmwares.filter(f=>f.devices.includes(select.value)))fw.add(new Option(`${f.version} (${f.build})`,f.build));document.querySelector('#match').replaceChildren();};
- fw.onchange=()=>{const m=recommendation(data,select.value,fw.value);document.querySelector('#match').innerHTML=!fw.value?'':m?`<div class="card"><h2>${esc(m.jailbreak.name)}</h2><p>${esc(m.jailbreak.type)} · Verify every prerequisite before following the guide.</p>${m.guide?.url?card(m.guide.name||'Read guide','Step-by-step instructions',m.guide.url.startsWith('/')?route(m.guide.url):m.guide.url):'<p>Read the jailbreak documentation from the original source.</p>'}</div>`:'<div class="notice">No supported jailbreak is listed for this exact device/build in the saved dataset.</div>';};
- }else if(hash==='guides'||hash==='saved'){
- app.innerHTML=`<h1>${hash==='saved'?'Saved guides':'Guide library'}</h1><label for="search">Search titles and guide text</label><input id="search" type="search" placeholder="TrollStore, sideloading, troubleshooting…"><div id="results" class="grid"></div>`;
- const search=document.querySelector('#search');function results(){const q=search.value.toLowerCase();const pages=guide.pages.filter(p=>(hash!=='saved'||saved.includes(p.path))&&(!q||`${p.title} ${p.text}`.toLowerCase().includes(q)));document.querySelector('#results').innerHTML=pages.map(p=>card(p.title,p.description||p.path,route(p.path))).join('')||'<p>No guides found.</p>';}search.oninput=results;results();
- }else if(hash==='bypasses'){
- app.innerHTML='<h1>Jailbreak detection reference</h1><p>Saved AppleDB reports. An entry does not guarantee an app will work.</p><label for="bypass-search">Search app</label><input id="bypass-search" type="search"><div id="bypass-results" class="grid"></div>';
- const input=document.querySelector('#bypass-search');const update=()=>{document.querySelector('#bypass-results').innerHTML=data.bypasses.filter(b=>b.name.toLowerCase().includes(input.value.toLowerCase())).map(b=>`<div class="card"><h3>${esc(b.name)}</h3><p>${esc(b.notes||'No additional notes recorded.')}</p><small>${esc(JSON.stringify(b.bypasses))}</small></div>`).join('');};input.oninput=update;update();
- }else if(hash==='signed'){
- const signed=f=>f.signed==='all'||Array.isArray(f.signed)&&f.signed.length;
- app.innerHTML='<h1>Signed firmware snapshot</h1><p>Signing status can change. Check AppleDB before restoring.</p><div class="grid">'+data.firmwares.filter(signed).map(f=>card(`${f.osStr} ${f.version}`,`${f.build} · ${Array.isArray(f.signed)?f.signed.length:'All listed'} devices`,'#devices')).join('')+'</div>';
- }else if(hash==='tools'){
- app.innerHTML='<h1>Tools & reference</h1><div class="row"><a class="button" href="#bypasses">App detection reference</a><a class="button" href="#signed">Signed firmware</a></div><div class="grid">'+['/saving-blobs/','/sideloading-apps/','/blocking-updates/','/blocking-jailbreak-detection/','/troubleshooting/','/package-managers/'].map(p=>{const g=guide.pages.find(g=>g.path===p);return g?card(g.title,'Open offline guide',route(p)):'';}).join('')+'</div><h2>Jailbreak reference</h2><div class="grid">'+data.jailbreaks.filter(j=>!j.hideFromGuide).sort((a,b)=>a.priority-b.priority).map(j=>card(j.name,`${j.type} · ${j.latestVersion||''}`,j.guides[0]?.url?.startsWith('/')?route(j.guides[0].url):'#devices')).join('')+'</div>';
- }else if(hash==='settings'){
- app.innerHTML=`<h1>Your offline library</h1><div class="card"><h2>${guide.pages.length} guides</h2><p>Guide snapshot: ${esc(guide.generated)}<br>AppleDB snapshot: ${esc(data.generated)}</p><p id="offline-state">Checking offline readiness…</p><button id="refresh">Check for an updated published copy</button><p id="refresh-note" role="status"></p></div><h2>Install on iPhone or iPad</h2><p>Open this website in Safari, tap Share, then Add to Home Screen. On supported browsers, use Install below.</p><button id="install">Install app</button><h2>About</h2><p>Unofficial reader. Guides and images: <a href="https://ios.cfw.guide/credits/" target="_blank" rel="noopener">cfw-guide contributors</a>. Device/firmware information: AppleDB. <a href="LICENSE.txt">Licenses</a>. Source snapshots describe support at their stated dates; they are not live device checks.</p>`;
- document.querySelector('#install').onclick=async()=>{if(installPrompt){await installPrompt.prompt();installPrompt=null;}else alert('In Safari: Share → Add to Home Screen. HTTPS hosting is required.');};
- if('serviceWorker'in navigator)navigator.serviceWorker.ready.then(()=>{document.querySelector('#offline-state')?.replaceChildren(document.createTextNode('Offline library installed. Browser storage can be cleared or evicted by the system.'));});
- document.querySelector('#refresh').onclick=async e=>{e.target.disabled=true;const note=document.querySelector('#refresh-note');try{const registration=await navigator.serviceWorker.getRegistration();if(!registration)throw Error('No service worker');await registration.update();if(registration.waiting){registration.waiting.postMessage('ACTIVATE');note.textContent='Updated copy installed. Reload to use it.';}else note.textContent='Update check complete. A changed published bundle installs in the background; keep this page open briefly, then reload.';}catch{note.textContent='Update check failed. Your existing offline copy is retained.';}finally{e.target.disabled=false;}};
- }else{
- app.innerHTML=`<section class="hero"><small>YOUR DEVICE. YOUR GUIDE.</small><h1>A clearer path<br>to custom firmware.</h1><p>Find the right instructions for your device. Keep the entire guide library close, even without a connection.</p><a class="button" href="#devices">Find my guide →</a></section><h2>Start with the essentials</h2><div class="grid">${card('Explore all guides',`${guide.pages.length} searchable pages`,'#guides')}${card('Match your device','Exact model and firmware lookup','#devices')}${card('Your saved guides','Pick up where you left off','#saved')}${card('Make it yours','Install and manage your offline copy','#settings')}</div><h2>Before you begin</h2><p>Read the introduction and prerequisites. Back up your device and verify that instructions match its exact model and build.</p><div class="grid">${card('Read the introduction','What you should know',route('/'))}${card('Frequently asked questions','Understand the basics',route('/faq/'))}</div>`;
- }
+const safeLink = (href) =>
+  String(href).startsWith("#")
+    ? href
+    : /^https?:\/\//i.test(href)
+      ? href
+      : "#devices";
+const card = (title, detail, href) =>
+  `<a class="card" href="${esc(safeLink(href))}"><h3>${esc(title)}</h3><span class="muted">${esc(detail)}</span></a>`;
+function state() {
+  status.textContent = offlineReady
+    ? navigator.onLine
+      ? "Online · offline library ready"
+      : "Offline · saved library"
+    : navigator.onLine
+      ? "Online · preparing offline copy"
+      : "Offline copy not ready";
 }
-window.addEventListener('hashchange',()=>{window.scrollTo(0,0);render();});window.addEventListener('online',state);window.addEventListener('offline',state);window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;});
-try{[guide,data]=await Promise.all(['guide.json','data.json'].map(async p=>{const r=await fetch(p);if(!r.ok)throw Error('Content unavailable');return r.json();}));validateSnapshot(guide,data);state();render();if('serviceWorker'in navigator){navigator.serviceWorker.ready.then(()=>{offlineReady=true;state();});navigator.serviceWorker.register('./sw.js').catch(()=>{status.textContent='Reading cached content · update check unavailable';});}}catch{app.innerHTML='<h1>Library unavailable</h1><p>Connect to the internet for the first visit, then reload to save the offline copy.</p>';status.textContent='Not ready offline';}
+function safeHTML(raw, path) {
+  const doc = new DOMParser().parseFromString(raw, "text/html");
+  doc
+    .querySelectorAll(
+      "script,iframe,object,embed,style,link,meta,form,svg,math,base",
+    )
+    .forEach((e) => e.remove());
+  for (const el of doc.querySelectorAll("*"))
+    for (const attr of [...el.attributes])
+      if (
+        attr.name.startsWith("on") ||
+        [
+          "srcdoc",
+          "style",
+          "srcset",
+          "formaction",
+          "action",
+          "ping",
+          "background",
+          "xlink:href",
+        ].includes(attr.name)
+      )
+        el.removeAttribute(attr.name);
+  doc.querySelectorAll("[src]").forEach((el) => {
+    let src = el.getAttribute("src");
+    if (src.startsWith("cfwasset:///assets/")) {
+      src = src.replace("cfwasset:///", "./");
+    }
+    try {
+      const u = new URL(src, new URL("./", location.href));
+      if (
+        u.origin !== location.origin ||
+        !["http:", "https:"].includes(u.protocol)
+      )
+        el.removeAttribute("src");
+      else el.setAttribute("src", u.href);
+    } catch {
+      el.removeAttribute("src");
+    }
+  });
+  doc.querySelectorAll("a").forEach((a) => {
+    try {
+      const u = new URL(a.getAttribute("href"), `https://ios.cfw.guide${path}`);
+      if (u.host === "ios.cfw.guide") {
+        a.href = u.pathname.startsWith("/get-started")
+          ? "#devices"
+          : route(u.pathname + u.hash);
+      } else if (["https:", "http:"].includes(u.protocol)) {
+        a.href = u.href;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+      } else a.removeAttribute("href");
+    } catch {
+      a.removeAttribute("href");
+    }
+  });
+  return doc.body.innerHTML;
+}
+function render() {
+  if (!guide) return;
+  const hash = location.hash.slice(1) || "home";
+  document.querySelectorAll("nav a").forEach((a) => {
+    a.removeAttribute("aria-current");
+    if (
+      a.hash === "#" + hash ||
+      (hash.startsWith("page=") && a.hash === "#guides")
+    )
+      a.setAttribute("aria-current", "page");
+  });
+  if (hash.startsWith("page=")) {
+    let path;
+    try {
+      path = decodeURIComponent(hash.slice(5));
+    } catch {
+      path = "/";
+    }
+    const page = guide.pages.find((p) => normalize(p.path) === normalize(path));
+    if (!page) {
+      app.innerHTML =
+        "<h1>Page unavailable</h1><p>This link is not in the bundled library. It may have been removed upstream.</p>";
+      return;
+    }
+    app.innerHTML = `<a href="#guides">← Guides</a><h1>${esc(page.title)}</h1><div class="row"><button id="bookmark">${saved.includes(page.path) ? "Remove bookmark" : "Save guide"}</button><a href="https://ios.cfw.guide${esc(page.path)}" target="_blank" rel="noopener">Original page ↗</a></div><article class="reader">${safeHTML(page.html, page.path)}</article><div class="row">${page.prev ? card("Previous", page.prev.title, route(page.prev.path)) : ""}${page.next ? card("Next", page.next.title, route(page.next.path)) : ""}</div>`;
+    document.querySelector("#bookmark").onclick = () => {
+      const next = saved.includes(page.path)
+        ? saved.filter((p) => p !== page.path)
+        : [...saved, page.path];
+      try {
+        localStorage.setItem("cfw.saved", JSON.stringify(next));
+        saved = next;
+        render();
+      } catch {
+        alert("Browser storage is unavailable. Bookmark was not saved.");
+      }
+    };
+    const fragment = path.split("#")[1];
+    if (fragment)
+      document.getElementById(decodeURIComponent(fragment))?.scrollIntoView();
+  } else if (hash === "devices") {
+    app.innerHTML =
+      '<h1>Find your guide</h1><p>Choose your exact model and software version. The browser cannot reliably detect your device model.</p><label for="device">Device</label><select id="device"><option value="">Choose model…</option></select><label for="firmware">Software version / build</label><select id="firmware" disabled><option>Select a device first</option></select><div id="match" aria-live="polite"></div>';
+    const select = document.querySelector("#device"),
+      fw = document.querySelector("#firmware");
+    for (const [id, d] of Object.entries(data.devices).sort((a, b) =>
+      a[1].name.localeCompare(b[1].name),
+    ))
+      select.add(new Option(`${d.name} · ${id}`, id));
+    select.onchange = () => {
+      fw.replaceChildren(new Option("Choose version…", ""));
+      fw.disabled = !select.value;
+      for (const f of data.firmwares.filter((f) =>
+        f.devices.includes(select.value),
+      ))
+        fw.add(new Option(`${f.version} (${f.build})`, f.build));
+      document.querySelector("#match").replaceChildren();
+    };
+    fw.onchange = () => {
+      const m = recommendation(data, select.value, fw.value);
+      document.querySelector("#match").innerHTML = !fw.value
+        ? ""
+        : m
+          ? `<div class="card"><h2>${esc(m.jailbreak.name)}</h2><p>${esc(m.jailbreak.type)} · Verify every prerequisite before following the guide.</p>${m.guide?.url ? card(m.guide.name || "Read guide", "Step-by-step instructions", m.guide.url.startsWith("/") ? route(m.guide.url) : m.guide.url) : "<p>Read the jailbreak documentation from the original source.</p>"}</div>`
+          : '<div class="notice">No supported jailbreak is listed for this exact device/build in the saved dataset.</div>';
+    };
+  } else if (hash === "guides" || hash === "saved") {
+    app.innerHTML = `<h1>${hash === "saved" ? "Saved guides" : "Guide library"}</h1><label for="search">Search titles and guide text</label><input id="search" type="search" placeholder="TrollStore, sideloading, troubleshooting…"><div id="results" class="grid"></div>`;
+    const search = document.querySelector("#search");
+    function results() {
+      const q = search.value.toLowerCase();
+      const pages = guide.pages.filter(
+        (p) =>
+          (hash !== "saved" || saved.includes(p.path)) &&
+          (!q || `${p.title} ${p.text}`.toLowerCase().includes(q)),
+      );
+      document.querySelector("#results").innerHTML =
+        pages
+          .map((p) => card(p.title, p.description || p.path, route(p.path)))
+          .join("") || "<p>No guides found.</p>";
+    }
+    search.oninput = results;
+    results();
+  } else if (hash === "bypasses") {
+    app.innerHTML =
+      '<h1>Jailbreak detection reference</h1><p>Saved AppleDB reports. An entry does not guarantee an app will work.</p><label for="bypass-search">Search app</label><input id="bypass-search" type="search"><div id="bypass-results" class="grid"></div>';
+    const input = document.querySelector("#bypass-search");
+    const update = () => {
+      document.querySelector("#bypass-results").innerHTML = data.bypasses
+        .filter((b) => b.name.toLowerCase().includes(input.value.toLowerCase()))
+        .map(
+          (b) =>
+            `<div class="card"><h3>${esc(b.name)}</h3><p>${esc(b.notes || "No additional notes recorded.")}</p><small>${esc(JSON.stringify(b.bypasses))}</small></div>`,
+        )
+        .join("");
+    };
+    input.oninput = update;
+    update();
+  } else if (hash === "signed") {
+    const signed = (f) =>
+      f.signed === "all" || (Array.isArray(f.signed) && f.signed.length);
+    app.innerHTML =
+      '<h1>Signed firmware snapshot</h1><p>Signing status can change. Check AppleDB before restoring.</p><div class="grid">' +
+      data.firmwares
+        .filter(signed)
+        .map((f) =>
+          card(
+            `${f.osStr} ${f.version}`,
+            `${f.build} · ${Array.isArray(f.signed) ? f.signed.length : "All listed"} devices`,
+            "#devices",
+          ),
+        )
+        .join("") +
+      "</div>";
+  } else if (hash === "tools") {
+    app.innerHTML =
+      '<h1>Tools & reference</h1><div class="row"><a class="button" href="#bypasses">App detection reference</a><a class="button" href="#signed">Signed firmware</a></div><div class="grid">' +
+      [
+        "/saving-blobs/",
+        "/sideloading-apps/",
+        "/blocking-updates/",
+        "/blocking-jailbreak-detection/",
+        "/troubleshooting/",
+        "/package-managers/",
+      ]
+        .map((p) => {
+          const g = guide.pages.find((g) => g.path === p);
+          return g ? card(g.title, "Open offline guide", route(p)) : "";
+        })
+        .join("") +
+      '</div><h2>Jailbreak reference</h2><div class="grid">' +
+      data.jailbreaks
+        .filter((j) => !j.hideFromGuide)
+        .sort((a, b) => a.priority - b.priority)
+        .map((j) =>
+          card(
+            j.name,
+            `${j.type} · ${j.latestVersion || ""}`,
+            j.guides[0]?.url?.startsWith("/")
+              ? route(j.guides[0].url)
+              : "#devices",
+          ),
+        )
+        .join("") +
+      "</div>";
+  } else if (hash === "settings") {
+    app.innerHTML = `<h1>Your offline library</h1><div class="card"><h2>${guide.pages.length} guides</h2><p>Guide snapshot: ${esc(guide.generated)}<br>AppleDB snapshot: ${esc(data.generated)}</p><p id="offline-state">Checking offline readiness…</p><button id="refresh">Check for an updated published copy</button><p id="refresh-note" role="status"></p></div><h2>Install on iPhone or iPad</h2><p>Open this website in Safari, tap Share, then Add to Home Screen. On supported browsers, use Install below.</p><button id="install">Install app</button><h2>About</h2><p>Unofficial reader. Guides and images: <a href="https://ios.cfw.guide/credits/" target="_blank" rel="noopener">cfw-guide contributors</a>. Device/firmware information: AppleDB. <a href="LICENSE.txt">Licenses</a>. Source snapshots describe support at their stated dates; they are not live device checks.</p>`;
+    document.querySelector("#install").onclick = async () => {
+      if (installPrompt) {
+        await installPrompt.prompt();
+        installPrompt = null;
+      } else
+        alert(
+          "In Safari: Share → Add to Home Screen. HTTPS hosting is required.",
+        );
+    };
+    if ("serviceWorker" in navigator)
+      navigator.serviceWorker.ready.then(() => {
+        document
+          .querySelector("#offline-state")
+          ?.replaceChildren(
+            document.createTextNode(
+              "Offline library installed. Browser storage can be cleared or evicted by the system.",
+            ),
+          );
+      });
+    document.querySelector("#refresh").onclick = async (e) => {
+      e.target.disabled = true;
+      const note = document.querySelector("#refresh-note");
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (!registration) throw Error("No service worker");
+        await registration.update();
+        if (registration.waiting) {
+          registration.waiting.postMessage("ACTIVATE");
+          note.textContent = "Updated copy installed. Reload to use it.";
+        } else
+          note.textContent =
+            "Update check complete. A changed published bundle installs in the background; keep this page open briefly, then reload.";
+      } catch {
+        note.textContent =
+          "Update check failed. Your existing offline copy is retained.";
+      } finally {
+        e.target.disabled = false;
+      }
+    };
+  } else {
+    app.innerHTML = `<section class="hero"><small>CFW Guide · iPhone & iPad</small><h1>Find the guide<br>for your device.</h1><p>Choose your model and software version to check supported methods. Read the prerequisites, then follow the instructions at your own pace.</p><a class="button" href="#devices">Find my guide →</a><a class="text-link" href="#guides">Browse all guides</a></section><h2>Guide library</h2><div class="grid">${card("Explore all guides", `${guide.pages.length} searchable pages`, "#guides")}${card("Match your device", "Exact model and firmware lookup", "#devices")}${card("Your saved guides", "Pick up where you left off", "#saved")}${card("Offline access", "Install the web app and check updates", "#settings")}</div><h2>Before you begin</h2><p>Read the introduction and prerequisites. Back up your device and verify that instructions match its exact model and build.</p><div class="grid">${card("Read the introduction", "What you should know", route("/"))}${card("Frequently asked questions", "Understand the basics", route("/faq/"))}</div>`;
+  }
+}
+window.addEventListener("hashchange", () => {
+  window.scrollTo(0, 0);
+  render();
+});
+window.addEventListener("online", state);
+window.addEventListener("offline", state);
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+try {
+  [guide, data] = await Promise.all(
+    ["guide.json", "data.json"].map(async (p) => {
+      const r = await fetch(p);
+      if (!r.ok) throw Error("Content unavailable");
+      return r.json();
+    }),
+  );
+  validateSnapshot(guide, data);
+  state();
+  render();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.ready.then(() => {
+      offlineReady = true;
+      state();
+    });
+    navigator.serviceWorker.register("./sw.js").catch(() => {
+      status.textContent = "Reading cached content · update check unavailable";
+    });
+  }
+} catch {
+  app.innerHTML =
+    "<h1>Library unavailable</h1><p>Connect to the internet for the first visit, then reload to save the offline copy.</p>";
+  status.textContent = "Not ready offline";
+}
